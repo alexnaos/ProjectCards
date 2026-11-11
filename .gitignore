@@ -1,0 +1,6 @@
+.env
+.cache.json
+*.log
+__pycache__/
+.venv/
+_attachments/
