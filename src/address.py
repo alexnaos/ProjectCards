@@ -1,107 +1,62 @@
-"""address.py — модуль извлечения адресов из текста.
-
-Содержит функции для распознавания и извлечения адресной информации
-из текстовых документов с использованием regex-паттернов.
-ADDRESS_PATTERNS = [
-    # Pattern: "г. Москва, ул. Ленина, д. 15"
-    r"г\.?\s*([А-Я][а-яё]+\s*(?:г|г\.?|п\.?п\.?|сел)\.?\s*,?\s*)?ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)(?:\s*,?\s*к\.?\s*(\d+))?",
-    # Pattern: "г Москва ул Ленина д 15 к 1"
-    r"г\s+([А-Я][а-яё]+)\s+ул\s+([А-Я][а-яё]+)\s+d\s+(\d+)(?:\s+k\s+(\d+))?",
-    # Pattern: "Москва, ул. Ленина, д. 15"
-    r"([А-Я][а-яё]+(?:\\s+г\.?)?\s*,?\s*ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)(?:\s*,?\s*к\.?\s*(\d+))?)",
-    # Pattern: "ул. Ленина, д. 15"
-    r"ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)(?:\s*,?\s*к\.?\s*(\d+))?",
-    # Pattern with index: "197026, г. Санкт-Петербург, ул. Невский проспект, д. 10"
-    r"(\d{6})\s*,?\s*г\.?\s*([А-Я][а-яё]+)\s*,?\s*ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)(?:\s*,?\s*к\.?\s*(\d+))?",
-]
-
-
-def extract_address(text: str) -> Optional[Dict[str, str]]:
-    """Извлечь адрес из текста с использованием regex-паттернов.
-
-    Args:
-        text: Текст для поиска адреса.
-
-    Returns:
-        Словарь с частями адреса (город, улица, дом, корпус) или None если адрес не найден.
-    """
-    if not text:
-        return None
-
-    for pattern in ADDRESS_PATTERNS:
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            groups = match.groups()
-            address_dict: Dict[str, str] = {}
-
-            if pattern == ADDRESS_PATTERNS[0]:
-                city_part = groups[0] if groups[0] else ""
-                street = groups[1] if len(groups) > 1 and groups[1] else ""
-                house = groups[2] if len(groups) > 2 and groups[2] else ""
-                apartment = groups[3] if len(groups) > 3 and groups[3] else ""
-
-                city_match = re.search(r"г\.?\s*([А-Я][а-яё]+)", city_part)
-                if city_match:
-                    address_dict["city"] = city_match.group(1)
-
-                if street:
-                    address_dict["street"] = street
-
-                if house:
-                    address_dict["house"] = house
-
-                if apartment:
-                    address_dict["apartment"] = apartment
-
-            elif pattern == ADDRESS_PATTERNS[1]:
-                if len(groups) >= 3:
-                    address_dict["city"] = groups[0] if groups[0] else ""
-                    address_dict["street"] = groups[1] if groups[1] else ""
-                    address_dict["house"] = groups[2] if groups[2] else ""
-                    if len(groups) > 3 and groups[3]:
-                        address_dict["apartment"] = groups[3]
-
-            elif pattern == ADDRESS_PATTERNS[2]:
-                if len(groups) >= 4:
-                    city_part = groups[0] if groups[0] else ""
-                    city_match = re.search(r"([А-Я][а-яё]+)(?:\\s+г\.?)?", city_part)
-                    if city_match:
-                        address_dict["city"] = city_match.group(1)
-                    if groups[1]:
-                        address_dict["street"] = groups[1]
-                    if groups[2]:
-                        address_dict["house"] = groups[2]
-                    if groups[3]:
-                        address_dict["apartment"] = groups[3]
-
-            elif pattern == ADDRESS_PATTERNS[3]:
-                if len(groups) >= 2:
-                    if groups[0]:
-                        address_dict["street"] = groups[0]
-                    if groups[1]:
-                        address_dict["house"] = groups[1]
-                    if len(groups) > 2 and groups[2]:
-                        address_dict["apartment"] = groups[2]
-
-            elif pattern == ADDRESS_PATTERNS[4]:
-                if len(groups) >= 5:
-                    if groups[1]:
-                        address_dict["city"] = groups[1]
-                    if groups[2]:
-                        address_dict["street"] = groups[2]
-                    if groups[3]:
-                        address_dict["house"] = groups[3]
-                    if groups[4]:
-                        address_dict["apartment"] = groups[4]
-
-            if "city" in address_dict or "street" in address_dict:
-                return address_dict
-
-    return None
-"""
+"""address.py — модуль извлечения адрезов из текста."""
 
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Optional, List, Dict, Any
+from collections import Counter
+from typing import Optional, List, Union
+
+
+def extract_address(texts: list[str], config: dict) -> str:
+    """
+    Возвращает самый вероятный адрес из объединённых текстов.
+    Пустая строка, если адрес не найден.
+    """
+    patterns = config.get("address", {}).get("patterns", [])
+    # Приводим к списку, если передан кортеж
+    if isinstance(patterns, tuple):
+        patterns = list(patterns)
+    min_length = config.get("address", {}).get("min_length", 3)
+    max_candidates = config.get("address", {}).get("max_candidates", 10)
+
+    if not patterns:
+        return ""
+
+    # Дополнительные паттерны для различных форматов адресов
+    all_patterns = patterns + [
+        # Pattern: "обл. City, г. Street, ul. Street, d Number"
+        r"обл\.\s*([А-Я][а-яё]+)\s*,\s*г\.?\s*([А-Я][а-яё]+)\s*,\s*ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)",
+        # Pattern: "г. City, пр-т Street, d Number"
+        r"г\.?\s*([А-Я][а-яё]+)\s*,?\s*пр-т\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)",
+        # Pattern: "г. City, пл. д. Number"
+        r"г\.?\s*([А-Я][а-яё]+)\s*,?\s*пл\.\s*д\.?\s*(\d+)",
+        # Pattern: abbrev city like СПб, г. Moscow
+        r"(\b[А-Я]{2,3}\.\s*[А-Я][а-яё]+)\s*,?\s*ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)",
+        # Pattern: "City, ul. Street, d Number" без г.
+        r"([А-Я][а-яё]+)\s*,\s*ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)",
+    ]
+
+    candidates = []
+
+    for text in texts:
+        for pattern in all_patterns:
+            for match in re.findall(pattern, text, re.UNICODE):
+                # re.findall с группами возвращает tuple, берем первый элемент
+                candidate = match[0] if isinstance(match, tuple) else match
+                candidate = candidate.strip()
+                candidate = re.sub(r"\s+", " ", candidate)
+                if len(candidate) >= min_length:
+                    candidates.append(candidate)
+
+    if not candidates:
+        return ""
+
+    counter = Counter(candidates)
+    top_candidates = counter.most_common(max_candidates)
+
+    if not top_candidates:
+        return ""
+
+    best = max(top_candidates, key=lambda x: (x[1], len(x[0])))[0]
+
+    return best
