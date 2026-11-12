@@ -34,7 +34,8 @@ INDEX_TEMPLATE = """
         .grid { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px; }
         .card { background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); width: 300px; padding: 15px; display: flex; flex-direction: column; }
         .card img { width: 100%; height: 180px; object-fit: cover; border-radius: 4px; margin-bottom: 10px; background: #eee; }
-        .card h2 { margin: 0 0 10px 0; font-size: 18px; }
+        .card h2 { margin: 0 0 5px 0; font-size: 18px; }
+        .path-text { color: #888; font-size: 12px; margin-bottom: 10px; }
         .card p { color: #666; font-size: 14px; flex-grow: 1; }
         .btn { display: block; text-align: center; margin-top: 15px; }
         .no-img { height: 180px; background: #eee; border-radius: 4px; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; color: #aaa; }
@@ -52,16 +53,17 @@ INDEX_TEMPLATE = """
                 <div class="no-img">Нет обложки</div>
             {% endif %}
             <h2>{{ p.title }}</h2>
-            <p>{{ p.description[:150] if p.description else 'Описание отсутствует' }}...</p>
-            <a href="/project/{{ p.folder }}" class="btn">Открыть карточку</a>
+            <div class="path-text">Путь: {{ p.path }}</div>
+            <p>{{ p.description[:100] if p.description else 'Описание отсутствует' }}...</p>
+            <a href="/project/{{ p.path }}" class="btn">Открыть карточку</a>
         </div>
+        {% else %}
+        <p>Проекты не найдены.</p>
         {% endfor %}
     </div>
 </body>
 </html>
 """
-
-# ... (верхняя часть файла без изменений) ...
 
 PROJECT_TEMPLATE = """
 <!DOCTYPE html>
@@ -72,14 +74,13 @@ PROJECT_TEMPLATE = """
         .sidebar { flex: 1; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: fit-content; }
         .main-content { flex: 2; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .cover-img { width: 100%; border-radius: 8px; margin-bottom: 20px; }
-        .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        .meta-table td { padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; font-size: 14px; }
-        .meta-table td:first-child { font-weight: bold; color: #555; width: 35%; }
+        .meta-table { width: 100%; border-collapse: collapse; }
+        .meta-table td { padding: 8px; border-bottom: 1px solid #eee; }
+        .meta-table td:first-child { font-weight: bold; color: #555; width: 40%; }
         .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-top: 20px; }
         .gallery img { width: 100%; height: 120px; object-fit: cover; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; transition: transform 0.2s; }
         .gallery img:hover { transform: scale(1.05); }
         .raw-text { background: #f9f9f9; padding: 15px; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px; color: #444; margin-top: 20px; }
-        .section-title { margin-top: 25px; margin-bottom: 10px; font-size: 18px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
     </style>
 </head>
 <body>
@@ -88,38 +89,21 @@ PROJECT_TEMPLATE = """
         <div class="sidebar">
             {% if cover %}<img src="{{ cover }}" class="cover-img" alt="Обложка">{% endif %}
             <h2>{{ title }}</h2>
-            
             <table class="meta-table">
-                <tr><td>Адрес:</td><td>{{ meta.address or 'Не определено' }}</td></tr>
+                <tr><td>Адрес:</td><td>{{ meta.address or 'Не указан' }}</td></tr>
                 <tr><td>Файлов:</td><td>{{ meta.volume_files or 0 }}</td></tr>
                 <tr><td>Размер:</td><td>{{ meta.volume_size_mb or 0 }} МБ</td></tr>
             </table>
-
-            <!-- Блок метаданных DOCX -->
-            {% if meta.doc_title and meta.doc_title != '—' %}
-            <h3 class="section-title">Свойства документа</h3>
-            <table class="meta-table">
-                {% if meta.doc_title != '—' %}<tr><td>Название:</td><td>{{ meta.doc_title }}</td></tr>{% endif %}
-                {% if meta.doc_subject != '—' %}<tr><td>Тема:</td><td>{{ meta.doc_subject }}</td></tr>{% endif %}
-                {% if meta.doc_tags != '—' %}<tr><td>Теги:</td><td>{{ meta.doc_tags }}</td></tr>{% endif %}
-                {% if meta.doc_comments != '—' %}<tr><td>Примечания:</td><td>{{ meta.doc_comments }}</td></tr>{% endif %}
-                {% if meta.doc_category != '—' %}<tr><td>Категория:</td><td>{{ meta.doc_category }}</td></tr>{% endif %}
-                {% if meta.doc_status != '—' %}<tr><td>Состояние:</td><td>{{ meta.doc_status }}</td></tr>{% endif %}
-            </table>
-            {% endif %}
         </div>
-        
         <div class="main-content">
             <h2>Описание</h2>
             <p>{{ meta.description or 'Описание отсутствует' }}</p>
-            
             {% if schematics %}
             <h2>Схемы и планы</h2>
             <div class="gallery">
                 {% for img in schematics %}<a href="{{ img }}" target="_blank"><img src="{{ img }}" alt="Схема"></a>{% endfor %}
             </div>
             {% endif %}
-            
             <h2>Исходный текст карточки</h2>
             <div class="raw-text">{{ raw_text }}</div>
         </div>
@@ -128,7 +112,6 @@ PROJECT_TEMPLATE = """
 </html>
 """
 
-# ... (нижняя часть файла extract_fm и @app.route без изменений) ...
 def extract_fm(content: str):
     fm = {}
     match = re.search(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
@@ -139,8 +122,6 @@ def extract_fm(content: str):
                 fm = parsed
         except Exception:
             pass
-            
-    # Достаем схемы из текста (ищем Obsidian-ссылки)
     schematics = []
     for m in re.finditer(r"!\[\[(.*?)\]\]", content):
         schematics.append(m.group(1))
@@ -151,33 +132,46 @@ def extract_fm(content: str):
 def index():
     projects = []
     if VAULT_PATH.exists():
-        for folder in VAULT_PATH.iterdir():
-            if folder.is_dir() and not folder.name.startswith("_"):
-                card = folder / f"{folder.name}.md"
-                if card.exists():
-                    content = card.read_text(encoding="utf-8")
-                    fm = extract_fm(content)
-                    
-                    cover = fm.get("cover", "")
-                    cover_url = None
-                    if cover:
-                        cover_clean = str(cover).replace("![[", "").replace("]]", "").strip().replace("\\", "/")
-                        cover_url = f"/image/_attachments/{folder.name}/{Path(cover_clean).name}"
-                    
-                    projects.append({
-                        "folder": folder.name,
-                        "title": fm.get("title", folder.name),
-                        "description": fm.get("description", ""),
-                        "cover": cover_url
-                    })
+        for card_path in VAULT_PATH.rglob("*.md"):
+            if card_path.stem != card_path.parent.name:
+                continue
+            if any(part.startswith(".") for part in card_path.parts):
+                continue
+            if "_attachments" in card_path.parts:
+                continue
+
+            folder_name = card_path.parent.name
+            rel_path = card_path.parent.relative_to(VAULT_PATH).as_posix()
+            
+            content = card_path.read_text(encoding="utf-8")
+            fm = extract_fm(content)
+            
+            cover = fm.get("cover", "")
+            cover_url = None
+            if cover:
+                cover_clean = str(cover).replace("![[", "").replace("]]", "").replace("\\", "/")
+                cover_url = f"/image/_attachments/{folder_name}/{Path(cover_clean).name}"
+            
+            projects.append({
+                "folder": folder_name,
+                "path": rel_path,
+                "title": fm.get("title", folder_name),
+                "description": fm.get("description", ""),
+                "cover": cover_url
+            })
+            
+    # Сортируем по пути: сначала корневые папки (Б, В, Г...), потом папки внутри ССК (ССК/1.Небо...)
+    projects.sort(key=lambda x: x["path"])
     return render_template_string(INDEX_TEMPLATE, projects=projects)
 
-@app.route("/project/<folder_name>")
-def project_detail(folder_name):
-    folder = VAULT_PATH / folder_name
+@app.route("/project/<path:folder_path>")
+def project_detail(folder_path):
+    folder = VAULT_PATH / folder_path
+    folder_name = folder.name
     card = folder / f"{folder_name}.md"
+    
     if not card.exists():
-        return f"<h1>Карточка проекта {folder_name} не найдена</h1><a href='/'>Назад</a>", 404
+        return f"<h1>Карточка не найдена: {folder_path}</h1><a href='/'>Назад</a>", 404
         
     content = card.read_text(encoding="utf-8")
     fm = extract_fm(content)
@@ -208,10 +202,12 @@ def serve_image(relative_path):
     image_path = VAULT_PATH / relative_path
     if image_path.exists() and image_path.is_file():
         return send_from_directory(str(image_path.parent), image_path.name)
+    
     filename = Path(relative_path).name
     for found in VAULT_PATH.rglob(filename):
         if found.is_file():
             return send_from_directory(str(found.parent), found.name)
+            
     abort(404)
 
 if __name__ == "__main__":

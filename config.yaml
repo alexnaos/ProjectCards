@@ -4,50 +4,39 @@
 # =============================================================================
 
 # --- Vault -----------------------------------------------------------------
-vault_path: "C:/test"
+vault_path: "C:/YandexDisk"
 card_filename: "{{folder_name}}.md"
 attachments_dir: "_attachments"
 
 # =============================================================================
 # ИСКЛЮЧЕНИЯ (что НЕ индексировать)
-# Порядок проверки при обходе:
-#   1. exclusions.exclude_paths      — точные относительные пути
-#   2. exclusions.folder_names       — имена папок на любой глубине
-#   3. exclusions.folder_globs       — glob по относительному пути папки
-#   4. exclusions.folder_regex       — regex по относительному пути папки
-#   5. exclusions.file_globs         — glob по имени/пути файла
-#   6. exclusions.file_regex         — regex по имени/пути файла
-#   7. exclusions.frontmatter_flag   — если в .md стоит exclude: true
-# Если сработало любое правило — папка/файл пропускается.
-# Все паттерны — Python glob (fnmatch) / re; регистр учитывается.
 # =============================================================================
 exclusions:
 
   # --- Точные пути (относительно vault_path) -------------------------------
   exclude_paths:
-    # --- служебные ---
+    # --- служебные и системные ---
     - ".obsidian"
     - ".trash"
     - ".git"
     - ".smart-env"
     - ".GeoniCS Projects"
-
-    # --- системные/шаблонные каталоги Vault ---
-    - "_attachments"
-    - "templates"
-    - "Templates"
-
-    # --- корневые папки Vault, не относящиеся к проектам ---
-    - "Clippings"
-    - "Obsidian Vault"
-    - "Архивн"
-    - "Загрузки"
+    - ".sync"
+    
+    # --- явно запрошенные пользователем ---
     - "Проекты"
     - "СЗ"
     - "Скриншоты"
-    - "СПДС"
-    - "ССК"
     - "Я_док"
+    - "Архивн"
+    
+    # --- прочий мусор из корня ---
+    - "Clippings"
+    - "Obsidian Vault"
+    - "Загрузки"
+    - "_attachments"
+    - "templates"
+    - "Templates"
 
   # --- Имена папок на любой глубине ---------------------------------------
   folder_names:
@@ -62,6 +51,11 @@ exclusions:
     - "templates"
     - "Templates"
     - "Attachments"
+    - "Архив"
+    - "0Архив"
+    - "0 Архив"
+    - "Архивн"
+    - "СПДС"
 
   # --- Glob по относительному пути папки ----------------------------------
   folder_globs:
@@ -76,36 +70,37 @@ exclusions:
     - "**/.cache/**"
     - "**/_archive/**"
     - "**/_archived/**"
-    - "**/*Архив*"               # Глоб на папки со словом Архив
 
   # --- Regex по относительному пути папки --------------------------------
   folder_regex:
-    - '^\d{4}_Архив/'           # папки «2023_Архив»
-    - '/_\d+$'                  # папки, оканчивающиеся на _1, _2...
+    - '^\d{4}_Архив/'
+    - '/_\d+$'
     - '/(old|draft|temp|backup)$'
-    - '(?i)архив'               # Исключает любые папки со словом Архив (регистр не важен)
-    - '(?i)archive'             # Исключает любые папки со словом Archive
+    - '(?i)архив'
+    - '(?i)archive'
+    - '^\d{2}-\d{2}-\d{4}_'    
+    # <--- ДОБАВИТЬ ЭТУ СТРОКУ
 
   # --- Исключения отдельных файлов ---------------------------------------
   file_globs:
     - "*.tmp"
-    - "*.bak"                   # Временные файлы
-    - "~$*"                     # временные Word/Excel
+    - "*.bak"
+    - "~$*"
     - ".DS_Store"
     - "Thumbs.db"
     - "*.log"
     - "*.lnk"
-    - "*.crdownload"            # недокачанные
+    - "*.crdownload"
     - "*.part"
     - ".cache.json"
 
   # --- Regex по имени/пути файла -----------------------------------------
   file_regex:
-    - '(?i).*\.bak$'            # Дублируем .bak через regex для надежности
-    - '^~\$.*'                  # ещё раз, но через regex
-    - '.*\.sync-conflict-.*'    # Syncthing-конфликты
-    - '.*\.conflict-.*'         # Resilio/Dropbox-конфликты
-    - '^\.~lock\..*#$'          # LibreOffice lock-файлы
+    - '(?i).*\.bak$'
+    - '^~\$.*'
+    - '.*\.sync-conflict-.*'
+    - '.*\.conflict-.*'
+    - '^\.~lock\..*#$'
 
   # --- Через frontmatter карточки ----------------------------------------
   frontmatter_flag:
@@ -115,9 +110,9 @@ exclusions:
   # --- Лимиты по размеру и количеству ------------------------------------
   size_limits:
     enabled: true
-    max_folder_size_mb: 5000     
-    max_files_per_folder: 5000   
-    max_file_size_mb: 200        
+    max_folder_size_mb: 5000
+    max_files_per_folder: 5000
+    max_file_size_mb: 200
 
 ignore_folders: []
 
@@ -126,13 +121,17 @@ project_detection:
   min_files: 1
   ignore_if_only_card: true
   max_depth: 0
+  # Папки-контейнеры: для них карточка не создается, скрипт заходит внутрь
+  container_folders:
+    - "ССК"
+   
 
 # --- Обрабатываемые расширения ---------------------------------------------
 supported_extensions:
-  text:   [".md", ".txt", ".csv", ".json"]
+  text: [".md", ".txt", ".csv", ".json"]
   office: [".docx", ".xlsx", ".pptx"]
-  pdf:    [".pdf"]
-  image:  [".jpg", ".jpeg", ".png", ".webp", ".gif"]
+  pdf: [".pdf"]
+  image: [".jpg", ".jpeg", ".png", ".webp", ".gif"]
 
 # --- LLM -------------------------------------------------------------------
 llm:
@@ -155,7 +154,6 @@ fallback_summary:
   top_terms: 15
   min_term_length: 4
   stop_words:
-    # Исправлены кракозябры на нормальный русский язык
     - "и"
     - "в"
     - "на"
@@ -192,18 +190,14 @@ fallback_summary:
 # --- Адрес -----------------------------------------------------------------
 address:
   enabled: true
-  # Паттерны отсюда больше не используются, так как мы переписали logic в address.py
-  # Но оставим для совместимости
-  patterns: [] 
+  patterns: []
   min_length: 8
   max_candidates: 50
 
 # --- Изображения -----------------------------------------------------------
 images:
-  cover_keywords: ["фасад", "facade", "render", "вид", "photo", "обложка",
-                   "general", "перспектива", "visual"]
-  plan_keywords: ["план", "plan", "генплан", "genplan", "фасад", "facade",
-                  "разрез", "section", "схема", "scheme"]
+  cover_keywords: ["фасад", "facade", "render", "вид", "photo", "обложка", "general", "перспектива", "visual"]
+  plan_keywords: ["план", "plan", "генплан", "genplan", "фасад", "facade", "разрез", "section", "схема", "scheme"]
   max_plan_images: 6
   pdf_render:
     enabled: true
