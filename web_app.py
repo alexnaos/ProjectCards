@@ -42,6 +42,8 @@ INDEX_TEMPLATE = """
     </style>
 </head>
 <body>
+    <a href="/" class="btn btn-back" style="display: inline-block; margin-bottom: 20px;">← На главную</a>
+    
     <h1>Project Cards — Обзор проектов</h1>
     <div class="grid">
         {% for p in projects %}
@@ -55,7 +57,7 @@ INDEX_TEMPLATE = """
             <h2>{{ p.title }}</h2>
             <div class="path-text">Путь: {{ p.path }}</div>
             <p>{{ p.description[:100] if p.description else 'Описание отсутствует' }}...</p>
-            <a href="/project/{{ p.path }}" class="btn">Открыть карточку</a>
+            <a href="/projects/project/{{ p.path }}" class="btn">Открыть карточку</a>
         </div>
         {% else %}
         <p>Проекты не найдены.</p>
@@ -64,7 +66,6 @@ INDEX_TEMPLATE = """
 </body>
 </html>
 """
-
 PROJECT_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -84,7 +85,7 @@ PROJECT_TEMPLATE = """
     </style>
 </head>
 <body>
-    <a href="/" class="btn btn-back">← Назад к списку</a>
+    <a href="/projects/" class="btn btn-back">← Назад к списку</a>
     <div class="container">
         <div class="sidebar">
             {% if cover %}<img src="{{ cover }}" class="cover-img" alt="Обложка">{% endif %}
@@ -146,11 +147,17 @@ def index():
             content = card_path.read_text(encoding="utf-8")
             fm = extract_fm(content)
             
+            # --- ФИЛЬТР ПУБЛИКАЦИИ ---
+            # Если поля publish нет, или оно false — пропускаем карточку
+            publish_val = fm.get("publish", False)
+            if str(publish_val).lower() != "true" and publish_val is not True:
+                continue
+            
             cover = fm.get("cover", "")
             cover_url = None
             if cover:
                 cover_clean = str(cover).replace("![[", "").replace("]]", "").replace("\\", "/")
-                cover_url = f"/image/_attachments/{folder_name}/{Path(cover_clean).name}"
+                cover_url = f"/projects/image/_attachments/{folder_name}/{Path(cover_clean).name}"
             
             projects.append({
                 "folder": folder_name,
@@ -160,7 +167,6 @@ def index():
                 "cover": cover_url
             })
             
-    # Сортируем по пути: сначала корневые папки (Б, В, Г...), потом папки внутри ССК (ССК/1.Небо...)
     projects.sort(key=lambda x: x["path"])
     return render_template_string(INDEX_TEMPLATE, projects=projects)
 
@@ -181,12 +187,12 @@ def project_detail(folder_path):
     cover_url = None
     if fm.get("cover"):
         cover_clean = str(fm["cover"]).replace("![[", "").replace("]]", "").replace("\\", "/")
-        cover_url = f"/image/_attachments/{folder_name}/{Path(cover_clean).name}"
+        cover_url = f"/projects/image/_attachments/{folder_name}/{Path(cover_clean).name}"
         
     schematics_urls = []
     for img in fm.get("schematics", []):
         img_clean = img.replace("![[", "").replace("]]", "").replace("\\", "/")
-        schematics_urls.append(f"/image/_attachments/{folder_name}/{Path(img_clean).name}")
+        schematics_urls.append(f"/projects/image/_attachments/{folder_name}/{Path(img_clean).name}")
 
     return render_template_string(
         PROJECT_TEMPLATE, 
