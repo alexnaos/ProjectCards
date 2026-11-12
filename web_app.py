@@ -25,10 +25,13 @@ BASE_STYLE = """
     </style>
 """
 
+# ==========================================
+# ШАБЛОН СПИСКА ПРОЕКТОВ (ГЛАВНАЯ)
+# ==========================================
 INDEX_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
-<head><meta charset="UTF-8"><title>Project Cards</title>""" + BASE_STYLE + """
+<head><meta charset="UTF-8"><title>Проекты</title>""" + BASE_STYLE + """
     <style>
         h1 { border-bottom: 2px solid #ccc; padding-bottom: 10px; }
         .grid { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px; }
@@ -44,7 +47,8 @@ INDEX_TEMPLATE = """
 <body>
     <a href="/" class="btn btn-back" style="display: inline-block; margin-bottom: 20px;">← На главную</a>
     
-    <h1>Project Cards — Обзор проектов</h1>
+    <h1>Проекты</h1>
+    
     <div class="grid">
         {% for p in projects %}
         <div class="card">
@@ -57,7 +61,7 @@ INDEX_TEMPLATE = """
             <h2>{{ p.title }}</h2>
             <div class="path-text">Путь: {{ p.path }}</div>
             <p>{{ p.description[:100] if p.description else 'Описание отсутствует' }}...</p>
-            <a href="/projects/project/{{ p.path }}" class="btn">Открыть карточку</a>
+            <a href="/projects/project/{{ p.path }}" class="btn">Открыть</a>
         </div>
         {% else %}
         <p>Проекты не найдены.</p>
@@ -66,6 +70,11 @@ INDEX_TEMPLATE = """
 </body>
 </html>
 """
+
+# ==========================================
+# ШАБЛОН ДЕТАЛЬНОЙ СТРАНИЦЫ КАРТОЧКИ
+# ==========================================
+
 PROJECT_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -82,6 +91,59 @@ PROJECT_TEMPLATE = """
         .gallery img { width: 100%; height: 120px; object-fit: cover; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; transition: transform 0.2s; }
         .gallery img:hover { transform: scale(1.05); }
         .raw-text { background: #f9f9f9; padding: 15px; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px; color: #444; margin-top: 20px; }
+        
+        /* --- Стили для галереи (Lightbox) --- */
+        .lightbox {
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            justify-content: center;
+            align-items: center;
+        }
+        .lightbox img {
+            max-width: 90%;
+            max-height: 90%;
+            object-fit: contain;
+            border-radius: 4px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            /* Клик по картинке не должен закрывать галерею */
+            cursor: default;
+        }
+        .lightbox-close {
+            position: absolute;
+            top: 20px;
+            right: 40px;
+            color: white;
+            font-size: 50px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 10000;
+        }
+        /* Стрелки влево/вправо */
+        .lightbox-prev, .lightbox-next {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            color: white;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 20px;
+            background-color: rgba(0, 0, 0, 0.5);
+            border-radius: 4px;
+            user-select: none;
+            z-index: 10000;
+        }
+        .lightbox-prev:hover, .lightbox-next:hover {
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+        .lightbox-prev { left: 20px; }
+        .lightbox-next { right: 20px; }
     </style>
 </head>
 <body>
@@ -102,13 +164,82 @@ PROJECT_TEMPLATE = """
             {% if schematics %}
             <h2>Схемы и планы</h2>
             <div class="gallery">
-                {% for img in schematics %}<a href="{{ img }}" target="_blank"><img src="{{ img }}" alt="Схема"></a>{% endfor %}
+                {% for img in schematics %}
+                    <!-- Передаем индекс картинки в функцию -->
+                    <a href="javascript:void(0);" onclick="openLightbox({{ loop.index0 }})">
+                        <img src="{{ img }}" alt="Схема">
+                    </a>
+                {% endfor %}
             </div>
             {% endif %}
-            <h2>Исходный текст карточки</h2>
+            <h2>Содержание</h2>
             <div class="raw-text">{{ raw_text }}</div>
         </div>
     </div>
+
+    <!-- Галерея (Lightbox) -->
+    <div id="lightbox" class="lightbox" onclick="closeLightbox()">
+        <span class="lightbox-close">&times;</span>
+        <span class="lightbox-prev" onclick="prevImage(event)">&#10094;</span>
+        <!-- event.stopPropagation не дает закрыться при клике на саму картинку -->
+        <img id="lightbox-img" src="" alt="Просмотр" onclick="event.stopPropagation()">
+        <span class="lightbox-next" onclick="nextImage(event)">&#10095;</span>
+    </div>
+
+    <!-- Скрипт управления галереей -->
+    <script>
+        // Получаем список путей к картинкам из Python
+        const images = {{ schematics | tojson }};
+        let currentIndex = 0;
+
+        function openLightbox(index) {
+            currentIndex = index;
+            updateImage();
+            document.getElementById('lightbox').style.display = 'flex';
+        }
+
+        function closeLightbox() {
+            document.getElementById('lightbox').style.display = 'none';
+            document.getElementById('lightbox-img').src = '';
+        }
+
+        function updateImage() {
+            if (images.length > 0) {
+                document.getElementById('lightbox-img').src = images[currentIndex];
+            }
+        }
+
+        function nextImage(event) {
+            if (event) event.stopPropagation();
+            if (images.length === 0) return;
+            // Переходим к следующей, если достигли конца - начинаем сначала
+            currentIndex = (currentIndex + 1) % images.length;
+            updateImage();
+        }
+
+        function prevImage(event) {
+            if (event) event.stopPropagation();
+            if (images.length === 0) return;
+            // Переходим к предыдущей, если в начале - переходим в конец
+            currentIndex = (currentIndex - 1 + images.length) % images.length;
+            updateImage();
+        }
+
+        // Слушаем нажатия клавиш
+        document.addEventListener('keydown', function(e) {
+            const lightbox = document.getElementById('lightbox');
+            // Работает только если галерея открыта
+            if (lightbox.style.display === 'flex') {
+                if (e.key === 'ArrowRight') {
+                    nextImage(e);
+                } else if (e.key === 'ArrowLeft') {
+                    prevImage(e);
+                } else if (e.key === 'Escape') {
+                    closeLightbox();
+                }
+            }
+        });
+    </script>
 </body>
 </html>
 """
@@ -148,7 +279,6 @@ def index():
             fm = extract_fm(content)
             
             # --- ФИЛЬТР ПУБЛИКАЦИИ ---
-            # Если поля publish нет, или оно false — пропускаем карточку
             publish_val = fm.get("publish", False)
             if str(publish_val).lower() != "true" and publish_val is not True:
                 continue
@@ -177,7 +307,7 @@ def project_detail(folder_path):
     card = folder / f"{folder_name}.md"
     
     if not card.exists():
-        return f"<h1>Карточка не найдена: {folder_path}</h1><a href='/'>Назад</a>", 404
+        return f"<h1>Карточка не найдена: {folder_path}</h1><a href='/projects/'>Назад</a>", 404
         
     content = card.read_text(encoding="utf-8")
     fm = extract_fm(content)
