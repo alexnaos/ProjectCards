@@ -11,6 +11,7 @@ from typing import Iterator
 import yaml
 
 from .logger import get_logger
+from .cache import load_cache, save_cache, is_unchanged, update_cache
 
 logger = get_logger(__name__)
 
@@ -71,27 +72,33 @@ def _is_excluded_by_glob(folder_path: Path, vault_root: Path, config: dict) -> b
             return True
 
 def _count_files(folder_path: Path, config: dict) -> int:
-    """Подсчитать файлы в папке, исключая карточку, _attachments и скрытые файлы.
+    """Подсчитать файлы рекурсивно во всех подпапках проекта.
 
     Args:
         folder_path: Путь к папке проекта.
         config: Данные конфигурации (используются для card_filename и attachments_dir).
 
     Returns:
-        Количество «данных» файлов в папке.
+        Количество «данных» файлов в папке и её подпапках.
     """
-    card_filename = config.get("card_filename", "{}.md")
+    card_filename = config.get("card_filename", "{{folder_name}}.md")
     attachments_dir = config.get("attachments_dir", "_attachments")
-    exclude_names = {card_filename.format(folder_name=folder_path.name), attachments_dir}
+    card_name = card_filename.replace("{{folder_name}}", folder_path.name)
+    exclude_names = {card_name, attachments_dir}
 
     count = 0
-    for entry in folder_path.iterdir():
-        if entry.name.startswith("."):
-            continue
-        if entry.is_dir():
-            continue
-        if entry.is_file() and entry.name not in exclude_names:
-            count += 1
+    try:
+        for entry in folder_path.rglob("*"):
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                continue
+            if entry.name in exclude_names:
+                continue
+            if entry.is_file():
+                count += 1
+    except Exception:
+        pass
     return count
 
 
@@ -113,6 +120,11 @@ def iter_projects(vault_path: Path, config: dict | None = None) -> Iterator[Proj
     - при ``project_detection.ignore_if_only_card = true`` папка не содержит
       только свой файл карточки.
 
+    Кэширование (roadmap 4a):
+    - Если ``cache.enabled = true``, загружает ``.cache.json`` и пропускает
+      unchanged проекты (skip_unchanged).
+    - Ключ кэша основан на mtime, size и хеше файлов.
+
     Args:
         vault_path: Корень Vault.
         config: Данные конфигурации. Если None — загружается из ``config.yaml``.
@@ -127,7 +139,23 @@ def iter_projects(vault_path: Path, config: dict | None = None) -> Iterator[Proj
     project_detection = config.get("project_detection", {})
     min_files = project_detection.get("min_files", 1)
     ignore_if_only_card = project_detection.get("ignore_if_only_card", True)
-
+    
+    # Cache setup (roadmap 4a)
+    cache_config = config.get("cache", {})
+    cache_enabled = cache_config.get("enabled", True)
+    skip_unchanged = cache_config.get("skip_unchanged", True)
+    cache_file = vault_root / cache_config.get("file", ".cache.json")
+    
+    cache = {}
+    cache_updated = False
+    found_projects = []
+    if cache_enabled and cache_file.exists():
+        try:
+            cache = load_cache(vault_root, config)
+        except Exception:
+            cache = {}
+            logger.warning("Could not load cache, recomputing all projects")
+    
     for entry in sorted(vault_root.iterdir(), key=lambda p: p.name.lower()):
         if not entry.is_dir():
             continue
@@ -147,7 +175,25 @@ def iter_projects(vault_path: Path, config: dict | None = None) -> Iterator[Proj
         if _is_excluded_by_glob(entry, vault_root, config):
             logger.debug("excluded by glob: %s", entry)
             continue
-
+        
+        # Check cache for unchanged
+        if skip_unchanged and cache_enabled:
+            is_cached, cached_data = is_unchanged(entry, cache, config)
+            if is_cached and cached_data is not None:
+                logger.debug("skip unchanged: %s", entry.name)
+                # Восстанавливаем ProjectFolder из кэша (roadmap 4a)
+                try:
+                    cached_project = ProjectFolder(
+                        path=entry,
+                        name=entry.name,
+                        card_path=entry / "{}.md".format(entry.name),
+                        file_count=cached_data.get("file_count", 0),
+                    )
+                    found_projects.append(cached_project)
+                except Exception:
+                    pass
+                continue
+        
         file_count = _count_files(entry, config)
         if file_count < min_files:
             continue
@@ -156,12 +202,33 @@ def iter_projects(vault_path: Path, config: dict | None = None) -> Iterator[Proj
             logger.info("skipped (only card): %s", entry.name)
             continue
 
-        yield ProjectFolder(
+        project = ProjectFolder(
             path=entry,
             name=entry.name,
             card_path=entry / "{}.md".format(entry.name),
             file_count=file_count,
         )
+        found_projects.append(project)
+
+        # Обновляем кэш (roadmap 4a)
+        if cache_enabled:
+            cache_data = {
+                "file_count": file_count,
+                "card_path": str(project.card_path),
+            }
+            cache = update_cache(entry, cache_data, cache, config)
+            cache_updated = True
+
+    # Сохраняем кэш после обхода всех проектов (roadmap 4a)
+    if cache_enabled and cache_updated:
+        try:
+            save_cache(cache, vault_root, config)
+            logger.debug("Cache saved to %s", cache_file)
+        except Exception as e:
+            logger.warning("Could not save cache: %s", e)
+
+    for project in found_projects:
+        yield project
 
 
 def find_project(vault_path: Path, folder_name: str, config: dict | None = None) -> ProjectFolder | None:

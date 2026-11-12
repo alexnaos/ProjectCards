@@ -1,62 +1,43 @@
-"""address.py — модуль извлечения адрезов из текста."""
-
-from __future__ import annotations
-
 import re
 from collections import Counter
-from typing import Optional, List, Union
 
 
 def extract_address(texts: list[str], config: dict) -> str:
-    """
-    Возвращает самый вероятный адрес из объединённых текстов.
-    Пустая строка, если адрес не найден.
-    """
-    patterns = config.get("address", {}).get("patterns", [])
-    # Приводим к списку, если передан кортеж
-    if isinstance(patterns, tuple):
-        patterns = list(patterns)
-    min_length = config.get("address", {}).get("min_length", 3)
-    max_candidates = config.get("address", {}).get("max_candidates", 10)
-
-    if not patterns:
+    """Извлекает самый вероятный полный адрес из текстов."""
+    if not texts:
         return ""
 
-    # Дополнительные паттерны для различных форматов адресов
-    all_patterns = patterns + [
-        # Pattern: "обл. City, г. Street, ul. Street, d Number"
-        r"обл\.\s*([А-Я][а-яё]+)\s*,\s*г\.?\s*([А-Я][а-яё]+)\s*,\s*ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)",
-        # Pattern: "г. City, пр-т Street, d Number"
-        r"г\.?\s*([А-Я][а-яё]+)\s*,?\s*пр-т\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)",
-        # Pattern: "г. City, пл. д. Number"
-        r"г\.?\s*([А-Я][а-яё]+)\s*,?\s*пл\.\s*д\.?\s*(\d+)",
-        # Pattern: abbrev city like СПб, г. Moscow
-        r"(\b[А-Я]{2,3}\.\s*[А-Я][а-яё]+)\s*,?\s*ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)",
-        # Pattern: "City, ul. Street, d Number" без г.
-        r"([А-Я][а-яё]+)\s*,\s*ул\.?\s*([А-Я][а-яё]+)\s*,?\s*д\.?\s*(\d+)",
+    # 1. Склеиваем текст и заменяем ВСЕ переносы строк на пробелы
+    flat_text = " ".join(" ".join(texts).split())
+
+    # 2. Иерархия паттернов (от самого полного к самому короткому)
+    patterns = [
+        # 1. Город + Улица + Дом/Корпус (например: г. Москва, ул. Ленина, д. 5)
+        r'(?:г\.|город|г\.о\.)?\s*[А-ЯЁ][а-яё\-]+(?:[^\n]{0,80}?)(?:ул\.|улица|пр-т|проспект|пер\.|переулок|ш\.|шоссе|проезд|бульвар|наб\.)\s*[А-ЯЁа-яё0-9\-\s]+?(?:д\.|дом|вл\.|владение|корп\.|корпус|к)\s*\d+[А-Яа-я0-9\/\-]*',
+        # 2. Город + Корпус (например: Зеленоград, к2025)
+        r'(?:г\.|город)?\s*[А-ЯЁ][а-яё\-]+[^\n]{0,30}?(?:корп\.|корпус|к\.|к)\s*\d+[А-Яа-я0-9\/\-]*',
+        # 3. Улица + Дом (например: ул. Ленина, д. 5)
+        r'(?:ул\.|улица|пр-т|проспект|пер\.|переулок|ш\.|шоссе|проезд|бульвар|наб\.)\s*[А-ЯЁа-яё0-9\-\s]+?(?:д\.|дом|вл\.|владение)\s*\d+[А-Яа-я0-9\/\-]*',
+        # 4. Только город (например: г. Зеленоград)
+        r'(?:г\.|город)\s*[А-ЯЁ][а-яё\-]+(?:\s+[А-ЯЁ][а-яё\-]+)?'
     ]
 
     candidates = []
-
-    for text in texts:
-        for pattern in all_patterns:
-            for match in re.findall(pattern, text, re.UNICODE):
-                # re.findall с группами возвращает tuple, берем первый элемент
-                candidate = match[0] if isinstance(match, tuple) else match
-                candidate = candidate.strip()
-                candidate = re.sub(r"\s+", " ", candidate)
-                if len(candidate) >= min_length:
-                    candidates.append(candidate)
+    for pattern in patterns:
+        for match in re.finditer(pattern, flat_text, re.IGNORECASE | re.UNICODE):
+            clean = " ".join(match.group(0).split())
+            # Убираем лишние символы (мусор) по краям
+            clean = re.sub(r'^[^А-ЯЁA-Zа-яёa-z0-9]+', '', clean)
+            clean = re.sub(r'[^А-ЯЁA-Zа-яёa-z0-9]+$', '', clean)
+            
+            if len(clean) > 5:
+                candidates.append(clean)
 
     if not candidates:
         return ""
 
+    # 3. Выбираем самый частый, а если частота равна — самый длинный
     counter = Counter(candidates)
-    top_candidates = counter.most_common(max_candidates)
-
-    if not top_candidates:
-        return ""
-
-    best = max(top_candidates, key=lambda x: (x[1], len(x[0])))[0]
-
-    return best
+    best_address = max(counter.keys(), key=lambda x: (counter[x], len(x)))
+    
+    return best_address

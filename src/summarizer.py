@@ -1,183 +1,78 @@
-"""summarizer.py — модуль суммаризации текста.
-
-Содержит функции для создания кратких суммар текста с использованием
-LLM и fallback-стратегии на основе TF-IDF.
-
-Примечание: Полноценная работа требует установки OpenAI API ключа и
-библиотеки scikit-learn для TF-IDF fallback.
-"""
-
-from __future__ import annotations
-
-import warnings
-from pathlib import Path
-from typing import Optional, List, Dict, Any
-
-import numpy as np
-
-# Попытка импорта библиотек
-try:
-    from sklearn.feature.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
-    warnings.warn("scikit-learn not available. TF-IDF fallback disabled.")
-
-try:
-    import openai
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    warnings.warn("openai not available. LLM summarization disabled.")
+import os
+import re
+from collections import Counter
 
 
-def summarize_with_llm(
-    text: str,
-    model: str = "gpt-4o-mini",
-    base_url: str = "https://api.openai.com/v1",
-    max_tokens: int = 1000,
-    temperature: float = 0.3,
-) -> Optional[str]:
-    """Создать суммарный текст с помощью LLM.
+def summarize(texts: list[str], config: dict) -> str:
+    """Создает описание проекта на основе текстов (LLM или умный fallback)."""
+    if not texts:
+        return ""
 
-    Args:
-        text: Исходный текст для суммаризации.
-        model: Название модели OpenAI.
-        base_url: URL базы OpenAI API.
-        max_tokens: Максимальное количество токенов в ответе.
-        temperature: Температура генерации.
+    combined_text = " ".join(texts)
+    
+    # --- Очистка от мусора PDF и LISP ---
+    # Убираем служебные теги PDF (obj, endobj, stream и т.д.)
+    clean_text = re.sub(r'\b(obj|endobj|stream|endstream|xref|trailer|startxref)\b', '', combined_text, flags=re.IGNORECASE)
+    # Убираем LISP-команды (если это AutoCAD)
+    clean_text = re.sub(r'\b(defun|setq|vlax|vla-|command|entget|ssget)\b.*?\n', '', clean_text, flags=re.IGNORECASE)
+    
+    # --- Ветка LLM (если включена и есть ключ) ---
+    llm_config = config.get("llm", {})
+    api_key = os.getenv("LLM_API_KEY")
+    
+    if llm_config.get("enabled") and api_key:
+        try:
+            import openai
+            client = openai.OpenAI(
+                base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
+                api_key=api_key
+            )
+            prompt = llm_config.get("system_prompt", "Сформируй краткое техническое описание объекта (2-4 предложения): тип, этажность, конструктив, материалы, стиль.")
+            
+            # Обрезаем текст для отправки
+            max_chars = llm_config.get("max_total_chars", 20000)
+            content_to_send = clean_text[:max_chars]
+            
+            response = client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": content_to_send}
+                ],
+                temperature=llm_config.get("temperature", 0.2),
+                max_tokens=llm_config.get("max_tokens", 400)
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"LLM Error: {e}. Переход на fallback.")
+            # Если ошибка LLM, идем в fallback
 
-    Returns:
-        Краткая суммаризация текста или None если LMM недоступен.
-    """
-    if not OPENAI_AVAILABLE:
-        print("OpenAI not available. LLM summarization disabled.")
-        return None
-
-    if not text or len(text.strip()) < 100:
-        print("Text too short for summarization.")
-        return None
-
-    try:
-        # Формируем промпт для суммаризации
-        prompt = f"""
-        Сделай краткую суммаризацию следующего текста на русском языке. 
-        Результат должен быть кратким (1-2 параграфа), содержать основные мысли.
+    # --- Ветка Fallback (если LLM выключена или упала) ---
+    # Ищем предложения с архитектурными/строительными терминами
+    keywords = ["площад", "этаж", "конструкт", "фасад", "жил", "дом", "материал", "кв.м", "м2", "корпус", "строительств", "помещен", "здание"]
+    sentences = re.split(r'(?<=[.!?])\s+', clean_text)
+    
+    good_sentences = []
+    for s in sentences:
+        s = s.strip()
+        # Берем предложения от 20 до 200 символов, где есть ключевые слова
+        if 20 < len(s) < 200 and any(kw in s.lower() for kw in keywords):
+            good_sentences.append(s)
+            
+    # Если нашли хорошие предложения, берем первые 3
+    if good_sentences:
+        # Убираем дубликаты, сохраняя порядок
+        seen = set()
+        unique_sentences = [x for x in good_sentences if not (x in seen or seen.add(x))]
+        return " ".join(unique_sentences[:3])
         
-        Текст:
-        {text[:5000]}  # Ограничиваем длину входного текста
+    # Если предложений с терминами нет, берем самые частые слова (исключая мусор)
+    words = re.findall(r'\b[а-яА-ЯёЁ]{4,}\b', clean_text.lower())
+    bad_words = {"который", "которая", "также", "более", "менее", "после", "перед", "между", "через", "чтобы", "этого", "этому", "будет", "может"}
+    filtered_words = [w for w in words if w not in bad_words]
+    
+    if filtered_words:
+        top_words = [w[0] for w in Counter(filtered_words).most_common(7)]
+        return "Ключевые темы: " + ", ".join(top_words).capitalize()
         
-        Краткая суммаризация:
-        """
-
-        response = openai.ChatCompletion.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-
-        summary = response.choices[0].message.content.strip()
-        return summary
-
-    except Exception as e:
-        print(f"Error in LLM summarization: {e}")
-        return None
-
-
-def summarize_with_tfidf(
-    text: str,
-    summary_ratio: float = 0.3,
-) -> Optional[str]:
-    """Создать суммарный текст с помощью TF-IDF fallback.
-
-    Args:
-        text: Исходный текст для суммаризации.
-        summary_ratio: Доля текста, которую нужно оставить (от 0 до 1).
-
-    Returns:
-        Краткая суммаризация текста или None если TF-IDF недоступен.
-    """
-    if not SKLEARN_AVAILABLE:
-        print("scikit-learn not available. TF-IDF fallback disabled.")
-        return None
-
-    if not text or len(text.strip()) < 100:
-        print("Text too short for summarization.")
-        return None
-
-    try:
-        # Подготовка текста
-        sentences = [s.strip() for s in text.split(". ") if s.strip()]
-        
-        if len(sentences) <= 2:
-            return text
-
-        # Создаем TF-IDF векторы
-        vectorizer = TfidfVectorizer(stop_words="russian", min_df=1, max_df=0.9)
-        tfidf_matrix = vectorizer.fit_transform(sentences)
-
-        # Вычисляем сходство каждого предложения с 전체 текстом
-        cosine_similarities = cosine_similarity(tfidf_matrix, tfidf_matrix).diagonal()
-
-        # Сортируем предложения по важности
-        ranked_indices = cosine_similarities.argsort()[::-1]
-
-        # Выбираем топ-N предложений
-        n_summary = max(1, int(len(sentences) * summary_ratio))
-        summary_indices = sorted(ranked_indices[:n_summary])
-
-        # Формируем суммаризацию в оригинальном порядке
-        summary_sentences = [sentences[i] for i in summary_indices]
-        summary = ". ".join(summary_sentences)
-
-        # Добавляем точку в конце если её нет
-        if not summary.endswith("."):
-            summary += "."
-
-        return summary
-
-    except Exception as e:
-        print(f"Error in TF-IDF summarization: {e}")
-        return None
-
-
-def summarize_text(
-    text: str,
-    use_llm: bool = True,
-    use_tfidf: bool = True,
-    **kwargs: Any,
-) -> Optional[str]:
-    """Основная функция суммаризации текста.
-
-    Пытается использовать LLM, если недоступен — падает back на TF-IDF.
-
-    Args:
-        text: Исходный текст для суммаризации.
-        use_llm: Попытаться ли использовать LLM.
-        use_tfidf: Попытаться ли использовать TF-IDF fallback.
-        **kwargs: Дополнительные аргументы для функций суммаризации.
-
-    Returns:
-        Краткая суммаризация текста.
-    """
-    # Попытка LLM
-    if use_llm and OPENAI_AVAILABLE:
-        llm_summary = summarize_with_llm(text, **kwargs)
-        if llm_summary:
-            return llm_summary
-
-    # Fallback на TF-IDF
-    if use_tfidf and SKLEARN_AVAILABLE:
-        tfidf_summary = summarize_with_tfidf(text, **kwargs)
-        if tfidf_summary:
-            return tfidf_summary
-
-    # Если ничего не получилось
-    print("Both LLM and TF-IDF summarization failed.")
-    # Возвращаем первые предложения как fallback
-    sentences = [s.strip() for s in text.split(". ") if s.strip()]
-    if sentences:
-        return ". ".join(sentences[:min(3, len(sentences))]) + "."
-    return text[:200] + "..." if len(text) > 200 else text
+    return "Описание не сформировано (текст не содержит архитектурных терминов)."
