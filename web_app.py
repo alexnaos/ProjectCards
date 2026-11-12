@@ -61,6 +61,8 @@ INDEX_TEMPLATE = """
 </html>
 """
 
+# ... (верхняя часть файла без изменений) ...
+
 PROJECT_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -70,13 +72,14 @@ PROJECT_TEMPLATE = """
         .sidebar { flex: 1; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: fit-content; }
         .main-content { flex: 2; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .cover-img { width: 100%; border-radius: 8px; margin-bottom: 20px; }
-        .meta-table { width: 100%; border-collapse: collapse; }
-        .meta-table td { padding: 8px; border-bottom: 1px solid #eee; }
-        .meta-table td:first-child { font-weight: bold; color: #555; width: 40%; }
+        .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        .meta-table td { padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; font-size: 14px; }
+        .meta-table td:first-child { font-weight: bold; color: #555; width: 35%; }
         .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-top: 20px; }
         .gallery img { width: 100%; height: 120px; object-fit: cover; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; transition: transform 0.2s; }
         .gallery img:hover { transform: scale(1.05); }
         .raw-text { background: #f9f9f9; padding: 15px; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px; color: #444; margin-top: 20px; }
+        .section-title { margin-top: 25px; margin-bottom: 10px; font-size: 18px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
     </style>
 </head>
 <body>
@@ -85,23 +88,38 @@ PROJECT_TEMPLATE = """
         <div class="sidebar">
             {% if cover %}<img src="{{ cover }}" class="cover-img" alt="Обложка">{% endif %}
             <h2>{{ title }}</h2>
+            
             <table class="meta-table">
-                <tr><td>Адрес:</td><td>{{ meta.address or 'Не указан' }}</td></tr>
+                <tr><td>Адрес:</td><td>{{ meta.address or 'Не определено' }}</td></tr>
                 <tr><td>Файлов:</td><td>{{ meta.volume_files or 0 }}</td></tr>
                 <tr><td>Размер:</td><td>{{ meta.volume_size_mb or 0 }} МБ</td></tr>
-                <tr><td>Рейтинг:</td><td>{{ meta.rating or '—' }}</td></tr>
-                <tr><td>Теги:</td><td>{{ meta.tags | join(', ') if meta.tags else '—' }}</td></tr>
             </table>
+
+            <!-- Блок метаданных DOCX -->
+            {% if meta.doc_title and meta.doc_title != '—' %}
+            <h3 class="section-title">Свойства документа</h3>
+            <table class="meta-table">
+                {% if meta.doc_title != '—' %}<tr><td>Название:</td><td>{{ meta.doc_title }}</td></tr>{% endif %}
+                {% if meta.doc_subject != '—' %}<tr><td>Тема:</td><td>{{ meta.doc_subject }}</td></tr>{% endif %}
+                {% if meta.doc_tags != '—' %}<tr><td>Теги:</td><td>{{ meta.doc_tags }}</td></tr>{% endif %}
+                {% if meta.doc_comments != '—' %}<tr><td>Примечания:</td><td>{{ meta.doc_comments }}</td></tr>{% endif %}
+                {% if meta.doc_category != '—' %}<tr><td>Категория:</td><td>{{ meta.doc_category }}</td></tr>{% endif %}
+                {% if meta.doc_status != '—' %}<tr><td>Состояние:</td><td>{{ meta.doc_status }}</td></tr>{% endif %}
+            </table>
+            {% endif %}
         </div>
+        
         <div class="main-content">
             <h2>Описание</h2>
             <p>{{ meta.description or 'Описание отсутствует' }}</p>
+            
             {% if schematics %}
             <h2>Схемы и планы</h2>
             <div class="gallery">
                 {% for img in schematics %}<a href="{{ img }}" target="_blank"><img src="{{ img }}" alt="Схема"></a>{% endfor %}
             </div>
             {% endif %}
+            
             <h2>Исходный текст карточки</h2>
             <div class="raw-text">{{ raw_text }}</div>
         </div>
@@ -110,6 +128,7 @@ PROJECT_TEMPLATE = """
 </html>
 """
 
+# ... (нижняя часть файла extract_fm и @app.route без изменений) ...
 def extract_fm(content: str):
     fm = {}
     match = re.search(r"^---\s*\n(.*?)\n---", content, re.DOTALL)

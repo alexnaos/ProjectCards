@@ -1,43 +1,46 @@
 import re
-from collections import Counter
 
 
 def extract_address(texts: list[str], config: dict) -> str:
-    """Извлекает самый вероятный полный адрес из текстов."""
-    if not texts:
-        return ""
+    if not texts: 
+        return "Не определено"
 
-    # 1. Склеиваем текст и заменяем ВСЕ переносы строк на пробелы
-    flat_text = " ".join(" ".join(texts).split())
-
-    # 2. Иерархия паттернов (от самого полного к самому короткому)
-    patterns = [
-        # 1. Город + Улица + Дом/Корпус (например: г. Москва, ул. Ленина, д. 5)
-        r'(?:г\.|город|г\.о\.)?\s*[А-ЯЁ][а-яё\-]+(?:[^\n]{0,80}?)(?:ул\.|улица|пр-т|проспект|пер\.|переулок|ш\.|шоссе|проезд|бульвар|наб\.)\s*[А-ЯЁа-яё0-9\-\s]+?(?:д\.|дом|вл\.|владение|корп\.|корпус|к)\s*\d+[А-Яа-я0-9\/\-]*',
-        # 2. Город + Корпус (например: Зеленоград, к2025)
-        r'(?:г\.|город)?\s*[А-ЯЁ][а-яё\-]+[^\n]{0,30}?(?:корп\.|корпус|к\.|к)\s*\d+[А-Яа-я0-9\/\-]*',
-        # 3. Улица + Дом (например: ул. Ленина, д. 5)
-        r'(?:ул\.|улица|пр-т|проспект|пер\.|переулок|ш\.|шоссе|проезд|бульвар|наб\.)\s*[А-ЯЁа-яё0-9\-\s]+?(?:д\.|дом|вл\.|владение)\s*\d+[А-Яа-я0-9\/\-]*',
-        # 4. Только город (например: г. Зеленоград)
-        r'(?:г\.|город)\s*[А-ЯЁ][а-яё\-]+(?:\s+[А-ЯЁ][а-яё\-]+)?'
-    ]
-
-    candidates = []
-    for pattern in patterns:
-        for match in re.finditer(pattern, flat_text, re.IGNORECASE | re.UNICODE):
-            clean = " ".join(match.group(0).split())
-            # Убираем лишние символы (мусор) по краям
-            clean = re.sub(r'^[^А-ЯЁA-Zа-яёa-z0-9]+', '', clean)
-            clean = re.sub(r'[^А-ЯЁA-Zа-яёa-z0-9]+$', '', clean)
-            
-            if len(clean) > 5:
-                candidates.append(clean)
-
-    if not candidates:
-        return ""
-
-    # 3. Выбираем самый частый, а если частота равна — самый длинный
-    counter = Counter(candidates)
-    best_address = max(counter.keys(), key=lambda x: (counter[x], len(x)))
+    full_text = " ".join(texts).replace('\n', ' ').replace('\r', ' ')
     
-    return best_address
+    # 1. Ищем ВСЕ вхождения "по адресу"
+    matches = re.finditer(r'(?:по\s+адресам?|адрес\s+объекта|адрес)\s*[:\-]\s*([^;]+(?:;|$))', full_text, re.IGNORECASE)
+    
+    candidates = []
+    for match in matches:
+        clean = match.group(1).strip()
+        # Обрезаем всё, что идет после точки с запятой или скобки
+        clean = re.split(r'[;(]', clean)[0].strip()
+        clean = clean.rstrip('.,;:- "\'«»')
+        
+        if len(clean) > 5:
+            candidates.append(clean)
+            
+    if candidates:
+        # Ищем идеальный вариант (где есть и город, и дом/улица)
+        best_candidates = [
+            c for c in candidates 
+            if ("москва" in c.lower() or "зеленоград" in c.lower() or "г." in c.lower() or "город" in c.lower()) 
+            and ("ул." in c.lower() or "пр-т" in c.lower() or "проспект" in c.lower() or "д." in c.lower() or "вал" in c.lower())
+        ]
+        
+        if best_candidates:
+            return max(best_candidates, key=len)
+        
+        # Если идеального нет, берем самый длинный из найденных
+        return max(candidates, key=len)
+
+    # 2. Если слова "адрес" нет, ищем "Город + Улица + Дом"
+    patterns = [
+        r'(?:г\.|город)\s*[А-ЯЁ][а-яё\-]+[^\n]{0,120}?(?:ул\.|улица|пр-т|проспект|пер\.|переулок|ш\.|шоссе|проезд|бульвар|наб\.)\s*[А-ЯЁа-яё0-9\-\s]+?(?:д\.|дом|вл\.|владение|стр\.|участок)\s*\d+[А-Яа-я0-9\/\-]*'
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, full_text, re.IGNORECASE)
+        if m:
+            return m.group(0).strip()
+
+    return "Не определено"
