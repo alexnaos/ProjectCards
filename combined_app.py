@@ -2,18 +2,33 @@ import os
 import sys
 from pathlib import Path
 
-PROJECT_CARDS_DIR = Path(r"C:\Projects\ProjectCards")
-MYFLASK_DIR = Path(r"C:\Projects\MyFlask")
+# Каталоги подпроектов: берутся из переменных окружения, по умолчанию — рядом с этим файлом.
+# Скрипт лежит в ProjectCards/, а MyFlask/ находится как соседний каталог.
+HERE = Path(__file__).resolve().parent
+
+PROJECT_CARDS_DIR = Path(os.environ.get("PROJECT_CARDS_DIR", str(HERE)))
+MYFLASK_DIR = Path(os.environ.get("MYFLASK_DIR", str(HERE.parent / "MyFlask")))
 
 sys.path.insert(0, str(MYFLASK_DIR))
 sys.path.insert(0, str(PROJECT_CARDS_DIR))
 
+# Опционально загружаем .env (для локальной разработки и удобства на сервере)
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(HERE / ".env")
+    load_dotenv(HERE.parent / ".env")
+except ImportError:
+    pass
+
+# ProjectCards: web_app читает config.yaml относительно своего каталога — переходим туда
+os.chdir(PROJECT_CARDS_DIR)
 from web_app import app as cards_app
 
-# Переключаем директорию для MyFlask
+# MyFlask: api.index читает конфиг относительно своего файла, но CWD важен для вложений
 os.chdir(MYFLASK_DIR)
-
 from api.index import app as myflask_app
+
 from waitress import serve
 from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
@@ -22,5 +37,6 @@ application = DispatcherMiddleware(myflask_app, {
 })
 
 if __name__ == '__main__':
-    print("Starting combined server on http://0.0.0.0:8080")
-    serve(application, host='0.0.0.0', port=8080, threads=4)
+    port = int(os.environ.get("PORT", "8080"))
+    print(f"Starting combined server on http://0.0.0.0:{port}")
+    serve(application, host='0.0.0.0', port=port, threads=4)

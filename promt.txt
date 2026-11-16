@@ -1,5 +1,10 @@
 
 
+https://chat.deepseek.com/share/sej5d4itn2p1y2rfmc
+
+итоговый чат
+
+
 ```
 # ЗАДАЧА: Генератор карточек проектов для Obsidian Vault
 
