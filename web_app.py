@@ -1,9 +1,11 @@
 ﻿import re
 import os
+import threading
+import time
 from pathlib import Path
 
 import yaml
-from flask import Flask, abort, render_template_string, send_from_directory
+from flask import Flask, abort, render_template_string, request, send_from_directory
 
 app = Flask(__name__)
 
@@ -18,6 +20,141 @@ if CONFIG_PATH.exists():
 VAULT_PATH = Path(
     os.environ.get("CARDS_CONTENT_DIR", "") or config.get("vault_path") or "/data"
 )
+
+# ==========================================
+# КЭШ СПИСКА ПРОЕКТОВ В ПАМЯТИ (TTL 300 c)
+# ==========================================
+# Сканирование WebDAV (Яндекс.Диск) — дорогая операция с сетевыми задержками,
+# поэтому результат держим в памяти и пересобираем не чаще раза в 5 минут.
+CACHE_TTL = 300  # секунд
+
+# Папки с медиа-мусором Яндекс.Диска — при os.walk их можно не обходить вообще.
+EXCLUDED_MEDIA_FOLDERS = {
+    "Фотокамера",
+    "Загрузки",
+    "Скриншоты",
+    "Социальные сети",
+    "Видео",
+    "Музыка",
+}
+# Кэш и примитивы синхронизации.
+_cache_cond = threading.Condition()
+_cache_projects = []      # готовый список проектов
+_cache_mtime = None       # time.monotonic() последней сборки
+_scan_in_progress = False # защита от «стаи запросов» на одном и том же сканe
+
+
+def _scan_projects():
+    """Найти все карточки проектов (.md с именем == имени папки).
+
+    Используется os.walk с обрезкой dirs[:] на месте: скрытые папки,
+    стандартные папки-медиа Яндекс.Диска и _attachments не обходятся,
+    что исключает тяжёлое сетевое сканирование WebDAV.
+    """
+    projects = []
+    if not VAULT_PATH.exists():
+        return projects
+
+    for root, dirs, files in os.walk(VAULT_PATH):
+        # Обрезаем каталоги прямо здесь, чтобы os.walk в них не спускался.
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith(".")
+            and d != "_attachments"
+            and d not in EXCLUDED_MEDIA_FOLDERS
+        ]
+        if not files:
+            continue
+
+        for fname in files:
+            if not fname.endswith(".md"):
+                continue
+            # Берём только файл-карточку: <Папка>.md в своей же папке.
+            card_path = Path(root) / fname
+            if card_path.stem != card_path.parent.name:
+                continue
+            if card_path.name.startswith("."):
+                continue
+
+            folder_name = card_path.parent.name
+            rel_path = card_path.parent.relative_to(VAULT_PATH).as_posix()
+
+            try:
+                content = card_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            fm = extract_fm(content)
+
+            publish_val = fm.get("publish", False)
+            if str(publish_val).lower() != "true" and publish_val is not True:
+                continue
+
+            cover = fm.get("cover", "")
+            cover_url = None
+            if cover:
+                cover_clean = str(cover).replace("![[", "").replace("]]", "").replace("\\", "/")
+                cover_url = f"/projects/image/_attachments/{folder_name}/{Path(cover_clean).name}"
+
+            projects.append({
+                "folder": folder_name,
+                "path": rel_path,
+                "title": fm.get("title", folder_name),
+                "description": fm.get("description", ""),
+                "cover": cover_url,
+            })
+
+    projects.sort(key=lambda x: x["path"])
+    return projects
+
+
+def get_projects(force=False):
+    """Вернуть кэшированный список проектов (при необходимости пересобрать).
+
+    force=True — принудительно пересобрать (кнопка ?refresh=1).
+    При одновременных запросах один поток реально сканирует, остальные ждут.
+    """
+    global _cache_projects, _cache_mtime, _scan_in_progress
+    while True:
+        with _cache_cond:
+            now = time.monotonic()
+            if _cache_mtime is not None and not force and (now - _cache_mtime) < CACHE_TTL:
+                return _cache_projects
+            if _scan_in_progress:
+                # Другой поток уже сканирует — ждём его результат.
+                _cache_cond.wait()
+                force = False
+                continue
+            _scan_in_progress = True
+
+        # Тяжёлый сетевой скан выполняем ВНЕ блокировки, чтобы другие потоки
+        # не блокировались на время ожидания ответа WebDAV.
+        projects = _scan_projects()
+        with _cache_cond:
+            _cache_projects = projects
+            _cache_mtime = time.monotonic()
+            _scan_in_progress = False
+            _cache_cond.notify_all()
+        return projects
+
+
+def _warmup_cache():
+    """Прогрев кэша: заполняет его сразу после старта приложения."""
+    start = time.monotonic()
+    try:
+        get_projects(force=True)
+        print(
+            f"[web_app] Кэш проектов прогрет: {len(_cache_projects)} карточек "
+            f"за {time.monotonic() - start:.1f}s"
+        )
+    except Exception as e:  # не роняем приложение из-за недоступного WebDAV
+        print(f"[web_app] Прогрев кэша не удался: {e}")
+
+
+def _start_warmup():
+    """Запустить фоновый поток прогрева кэша при старте приложения."""
+    thread = threading.Thread(target=_warmup_cache, daemon=True, name="cache-warmup")
+    thread.start()
+
 
 # ==========================================
 # ШАБЛОН СПИСКА ПРОЕКТОВ (ГЛАВНАЯ)
@@ -37,7 +174,9 @@ INDEX_TEMPLATE = """
         
         <a href="/" class="btn btn-outline-dark mb-4">← На главную</a>
         
-        <h1 class="mb-4 border-bottom pb-3">Проекты</h1>
+        <h1 class="mb-4 border-bottom pb-3 d-flex justify-content-between align-items-center">Проекты
+            <a href="/projects/?refresh=1" class="btn btn-outline-secondary btn-sm" title="Пересканировать Яндекс.Диск">⟳ Обновить</a>
+        </h1>
         
         <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
             {% for p in projects %}
@@ -245,41 +384,9 @@ def extract_fm(content: str):
 
 @app.route("/")
 def index():
-    projects = []
-    if VAULT_PATH.exists():
-        for card_path in VAULT_PATH.rglob("*.md"):
-            if card_path.stem != card_path.parent.name:
-                continue
-            if any(part.startswith(".") for part in card_path.parts):
-                continue
-            if "_attachments" in card_path.parts:
-                continue
-
-            folder_name = card_path.parent.name
-            rel_path = card_path.parent.relative_to(VAULT_PATH).as_posix()
-            
-            content = card_path.read_text(encoding="utf-8")
-            fm = extract_fm(content)
-            
-            publish_val = fm.get("publish", False)
-            if str(publish_val).lower() != "true" and publish_val is not True:
-                continue
-            
-            cover = fm.get("cover", "")
-            cover_url = None
-            if cover:
-                cover_clean = str(cover).replace("![[", "").replace("]]", "").replace("\\", "/")
-                cover_url = f"/projects/image/_attachments/{folder_name}/{Path(cover_clean).name}"
-            
-            projects.append({
-                "folder": folder_name,
-                "path": rel_path,
-                "title": fm.get("title", folder_name),
-                "description": fm.get("description", ""),
-                "cover": cover_url
-            })
-            
-    projects.sort(key=lambda x: x["path"])
+    # ?refresh=1 — принудительно пересобрать список (кнопка «Обновить»).
+    force = request.args.get("refresh", "") == "1"
+    projects = get_projects(force=force)
     return render_template_string(INDEX_TEMPLATE, projects=projects)
 
 @app.route("/project/<path:folder_path>")
@@ -327,6 +434,10 @@ def serve_image(relative_path):
             return send_from_directory(str(found.parent), found.name)
             
     abort(404)
+
+# Запускаем фоновый прогрев кэша при старте приложения (срабатывает и при
+# импорте из combined_app.py в контейнере, и при прямом запуске этого файла).
+_start_warmup()
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
