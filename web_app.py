@@ -1,4 +1,5 @@
-﻿import re
+from concurrent.futures import ThreadPoolExecutor
+import re
 import os
 import threading
 import time
@@ -18,15 +19,15 @@ if CONFIG_PATH.exists():
 # Путь к контенту: значение переменной окружения CARDS_CONTENT_DIR (по умолчанию /data),
 # иначе берём vault_path из config.yaml.
 VAULT_PATH = Path(
-    os.environ.get("CARDS_CONTENT_DIR", "") or config.get("vault_path") or "/data"
+    os.environ.get("CARDS_CONTENT_DIR", "") or config.get("vault_path") or "C:/YandexDisk"
 )
 
-# ==========================================
+# ========================================== list()
 # КЭШ СПИСКА ПРОЕКТОВ В ПАМЯТИ (TTL 300 c)
-# ==========================================
+# ========================================== list()
 # Сканирование WebDAV (Яндекс.Диск) — дорогая операция с сетевыми задержками,
 # поэтому результат держим в памяти и пересобираем не чаще раза в 5 минут.
-CACHE_TTL = 300  # секунд
+CACHE_TTL = 3600  # секунд
 
 # Папки с медиа-мусором Яндекс.Диска — при os.walk их можно не обходить вообще.
 EXCLUDED_MEDIA_FOLDERS = {
@@ -45,63 +46,70 @@ _scan_in_progress = False # защита от «стаи запросов» на
 
 
 def _scan_projects():
-    """Найти все карточки проектов (.md с именем == имени папки).
-
-    Используется os.walk с обрезкой dirs[:] на месте: скрытые папки,
-    стандартные папки-медиа Яндекс.Диска и _attachments не обходятся,
-    что исключает тяжёлое сетевое сканирование WebDAV.
-    """
+    """Строго 1 уровень в корне + 1 уровень внутри container_folders (без рекурсии)."""
     projects = []
     if not VAULT_PATH.exists():
         return projects
 
-    for root, dirs, files in os.walk(VAULT_PATH):
-        # Обрезаем каталоги прямо здесь, чтобы os.walk в них не спускался.
-        dirs[:] = [
-            d for d in dirs
-            if not d.startswith(".")
-            and d != "_attachments"
-            and d not in EXCLUDED_MEDIA_FOLDERS
-        ]
-        if not files:
-            continue
+    exclude_paths = set(config.get("exclusions", {}).get("exclude_paths") or [])
+    exclude_names = set(config.get("exclusions", {}).get("folder_names") or []) | EXCLUDED_MEDIA_FOLDERS
+    containers = set(config.get("project_detection", {}).get("container_folders") or [])
 
-        for fname in files:
-            if not fname.endswith(".md"):
-                continue
-            # Берём только файл-карточку: <Папка>.md в своей же папке.
-            card_path = Path(root) / fname
-            if card_path.stem != card_path.parent.name:
-                continue
-            if card_path.name.startswith("."):
-                continue
-
-            folder_name = card_path.parent.name
-            rel_path = card_path.parent.relative_to(VAULT_PATH).as_posix()
-
-            try:
-                content = card_path.read_text(encoding="utf-8")
-            except Exception:
-                continue
+    def _check_folder(item):
+        folder_path, rel_path = item
+        folder_name = folder_path.name
+        card_path = folder_path / f"{folder_name}.md"
+        if not card_path.is_file():
+            return None
+        try:
+            content = card_path.read_text(encoding="utf-8")
             fm = extract_fm(content)
+        except Exception:
+            return None
+        publish_val = fm.get("publish", False)
+        if str(publish_val).lower() != "true" and publish_val is not True:
+            return None
+        cover = fm.get("cover", "")
+        cover_url = None
+        if cover:
+            cover_clean = str(cover).replace("![[", "").replace("]]", "").replace("\\", "/")
+            cover_url = f"/projects/image/_attachments/{folder_name}/{Path(cover_clean).name}"
+        return {
+            "folder": folder_name,
+            "path": rel_path,
+            "title": fm.get("title", folder_name),
+            "description": fm.get("description", ""),
+            "cover": cover_url,
+        }
 
-            publish_val = fm.get("publish", False)
-            if str(publish_val).lower() != "true" and publish_val is not True:
+    targets = list()
+    try:
+        for entry in os.scandir(VAULT_PATH):
+            name = entry.name
+            if name.startswith(".") or not entry.is_dir(follow_symlinks=False):
                 continue
+            if name in exclude_paths or name in exclude_names:
+                continue
+            if name in containers:
+                try:
+                    for sub in os.scandir(entry.path):
+                        sname = sub.name
+                        if sname.startswith(".") or not sub.is_dir(follow_symlinks=False):
+                            continue
+                        if sname in exclude_names or f"{name}/{sname}" in exclude_paths:
+                            continue
+                        targets.append((Path(sub.path), f"{name}/{sname}"))
+                except OSError:
+                    pass
+            else:
+                targets.append((Path(entry.path), name))
+    except OSError:
+        pass
 
-            cover = fm.get("cover", "")
-            cover_url = None
-            if cover:
-                cover_clean = str(cover).replace("![[", "").replace("]]", "").replace("\\", "/")
-                cover_url = f"/projects/image/_attachments/{folder_name}/{Path(cover_clean).name}"
-
-            projects.append({
-                "folder": folder_name,
-                "path": rel_path,
-                "title": fm.get("title", folder_name),
-                "description": fm.get("description", ""),
-                "cover": cover_url,
-            })
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for res in pool.map(_check_folder, targets):
+            if res:
+                projects.append(res)
 
     projects.sort(key=lambda x: x["path"])
     return projects
@@ -156,9 +164,9 @@ def _start_warmup():
     thread.start()
 
 
-# ==========================================
+# ========================================== list()
 # ШАБЛОН СПИСКА ПРОЕКТОВ (ГЛАВНАЯ)
-# ==========================================
+# ========================================== list()
 INDEX_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -214,9 +222,9 @@ INDEX_TEMPLATE = """
 </html>
 """
 
-# ==========================================
+# ========================================== list()
 # ШАБЛОН ДЕТАЛЬНОЙ СТРАНИЦЫ КАРТОЧКИ
-# ==========================================
+# ========================================== list()
 PROJECT_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -441,3 +449,6 @@ _start_warmup()
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
+
+threading.Thread(target=get_projects, daemon=True).start()
+
